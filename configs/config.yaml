@@ -1,0 +1,32 @@
+# Parametric PINN — Training Configuration
+
+model:
+  input_dim: 3          # [x, y, Re]
+  output_dim: 3         # [u, v, p]
+  hidden_layers: 6
+  neurons_per_layer: 64
+  activation: tanh
+
+physics:
+  re_min: 100
+  re_max: 1000
+  rho: 1.0              # fluid density
+  nu: 0.01              # kinematic viscosity
+
+training:
+  epochs_adam: 10000
+  epochs_lbfgs: 50000
+  learning_rate: 1.0e-3
+  batch_size: 2048
+
+loss_weights:
+  lambda_pde: 1.0
+  lambda_bc: 10.0
+  lambda_data: 5.0
+  lambda_reg: 1.0e-4
+
+paths:
+  data_dir: data/
+  checkpoint_dir: results/checkpoints/
+  figures_dir: results/figures/
+  log_dir: results/logs/
