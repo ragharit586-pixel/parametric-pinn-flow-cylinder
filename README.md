@@ -32,11 +32,60 @@ Unlike traditional CFD solvers that require expensive re-simulation for every ne
 | **Training Data** | **No CFD field data** (u,v,p) |
 | **Physics-Only Cd Error** | ~4–5% |
 | **Benchmark-Informed Cd Error** | **~2.27% mean (1.5–3.4% range)** |
-| **Separation Angle Error** | ~10.81% mean (3.2% for Re ≥ 20) |
+| **Separation Angle Error** | ~10.81% mean (6.6% for Re ≥ 20) |
 | **Real-Time Inference Speed** | <50ms (NVIDIA T4) |
 | **Reynolds Number Range** | Re = 10 → 47 (steady regime) |
 | **Training Hardware** | NVIDIA T4 GPU (Kaggle) |
 | **Total Parameters** | 11,722 |
+
+---
+
+## Flow Field Visualizations
+
+### Parametric Generalization — u-velocity vs Reynolds Number
+> Smooth continuous prediction across all Re. Training points lie exactly on the parametric curve.
+
+![Parametric Curve](results/figures/parametric_curve_u_vs_Re.png)
+
+---
+
+### Velocity Profiles Across All Training Re
+> Left: Horizontal centerline velocity (y=H/2). Right: Vertical velocity profile (x=0.5m).
+
+![Velocity Profiles](results/figures/centerline_velocity_profiles.png)
+
+---
+
+### Training Cases
+
+**Re = 10** — Training, Steady Regime
+![Re10](results/figures/flow_field_Re10_training.png)
+
+**Re = 15** — Training, Steady Regime
+![Re15](results/figures/flow_field_Re15_training.png)
+
+**Re = 20** — Training, Steady Regime
+![Re20](results/figures/flow_field_Re20_training.png)
+
+---
+
+### Interpolation Tests (Re Never Seen During Training)
+
+**Re = 12** — Interpolation Test (between Re=10 and Re=15)
+![Re12](results/figures/flow_field_Re12_interpolation.png)
+
+**Re = 28** — Interpolation Test (between Re=25 and Re=30)
+![Re28](results/figures/flow_field_Re28_interpolation.png)
+
+---
+
+### Extrapolation Tests (Beyond Training Range)
+
+**Re = 42** — Extrapolation (beyond max training Re=40)
+![Re42](results/figures/flow_field_Re42_extrapolation.png)
+
+**Re = 45** — Extrapolation (close to critical Re=47)
+![Re45](results/figures/flow_field_Re45_extrapolation.png)
 
 ---
 
@@ -50,16 +99,22 @@ Traditional CFD (e.g., ANSYS Fluent) requires **full re-simulation** for every n
 Input:  (x, y, Re)  →  Parametric PINN  →  Output: (ψ, p)  →  Derive: (u, v)
 ```
 
+### Why This Matters
+- **No CFD solution fields required** — learns from physics equations only
+- **Instant parametric predictions** — no re-simulation needed
+- **Steady regime coverage** — Re = 10–47 (before vortex shedding onset)
+- **Flexible training modes** — physics-only baseline or benchmark-informed refinement
+
 ---
 
 ## Method
 
 ### Architecture
-- **Input layer:** `[x, y, Re]` (3 neurons)
+- **Input layer:** `[x, y, Re]` (3 neurons) — spatial coordinates + Reynolds number
 - **Hidden layers:** **8 fully-connected layers × 40 neurons**, tanh activation
-- **Output layer:** `[ψ, p]` (2 neurons)
+- **Output layer:** `[ψ, p]` (2 neurons) — stream function + pressure
 - **Total parameters:** 11,722
-- **Input scaling:** All inputs normalized to [-1, 1]
+- **Input scaling:** All inputs normalized to [-1, 1] for balanced gradients
 - **Velocity derivation:** `u = ∂ψ/∂y`, `v = -∂ψ/∂x` via automatic differentiation
 
 ### Reynolds Number Configuration
@@ -67,8 +122,10 @@ Input:  (x, y, Re)  →  Parametric PINN  →  Output: (ψ, p)  →  Derive: (u,
 | Split | Re Values | Count |
 |-------|-----------|-------|
 | **Training** | 10, 15, 20, 25, 30, 35, 40 | 7 |
-| **Interpolation test** | 12, 28 | 2 |
-| **Extrapolation test** | 42, 45 | 2 |
+| **Interpolation test** | 12 (between 10–15), 28 (between 25–30) | 2 |
+| **Extrapolation test** | 42, 45 (beyond training, still < Re_critical=47) | 2 |
+
+All Reynolds numbers stay **below Re_critical = 47** (steady-state regime, no vortex shedding).
 
 ---
 
@@ -81,7 +138,7 @@ L_total = L_PDE + β_BC · L_BC
 ```
 - **Cd Error:** ~4–5% | Zero external data
 
-### Mode B: Physics + Benchmark-Informed Constraints
+### Mode B: Physics + Benchmark-Informed Constraints (Weakly Supervised)
 
 ```
 L_total = L_PDE + β_BC·L_BC + β_Cd·L_Cd + β_wake·L_wake + β_Bern·L_Bernoulli + β_surf·L_surface
@@ -100,6 +157,12 @@ L_total = L_PDE + β_BC·L_BC + β_Cd·L_Cd + β_wake·L_wake + β_Bern·L_Berno
 | Wake length | `L_wake` | 0.5 | Recirculation zone size constraint |
 | Bernoulli regularization | `L_Bern` | 0.3 | Outer flow pressure-velocity consistency |
 | Surface pressure | `L_surf` | 0.2 | Correct pressure gradient on cylinder |
+
+### Governing Equations (PDE Loss)
+- **Continuity:** `∂u/∂x + ∂v/∂y = 0`
+- **Momentum-x:** `u·∂u/∂x + v·∂u/∂y + ∂p/∂x − ν·∇²u = 0`
+- **Momentum-y:** `u·∂v/∂x + v·∂v/∂y + ∂p/∂y − ν·∇²v = 0`
+- Kinematic viscosity: `ν = U·D/Re` (computed dynamically per point)
 
 ---
 
@@ -141,7 +204,9 @@ Adam (35k epochs) → L-BFGS Round 1 (3k iter) → L-BFGS Round 2 (3k iter)
 | 45 *(extrap)* | 1.3086 | 1.331 | **1.68%** |
 | | | **Mean Error** | **2.27%** |
 
-**Key observation:** Extrapolation cases (Re = 42, 45 — beyond training range) achieve <2% Cd error, demonstrating strong generalization.
+**Key observation:** Extrapolation cases (Re = 42, 45) achieve <2% Cd error — strong generalization beyond training range.
+
+---
 
 ### Separation Angle
 
@@ -156,7 +221,7 @@ Adam (35k epochs) → L-BFGS Round 1 (3k iter) → L-BFGS Round 2 (3k iter)
 | 40 | 75.0 | 84.0 | 10.7% |
 | | | **Mean Error** | **10.81%** |
 
-> Note: Higher error at Re = 10–15 due to weak separation signal at low Reynolds numbers. For Re ≥ 20, mean error is **~6.6%**.
+> Note: Higher error at Re = 10–15 is attributed to weak separation signal at low Reynolds numbers (laminar onset regime). For **Re ≥ 20, mean error reduces to ~6.6%**.
 
 ---
 
@@ -167,7 +232,7 @@ Adam (35k epochs) → L-BFGS Round 1 (3k iter) → L-BFGS Round 2 (3k iter)
 | Drag Coefficient (Cd) | ✅ Validated — 2.27% mean error |
 | Separation Angle | ⚠️ Validated — 10.81% mean (6.6% for Re ≥ 20) |
 | Wake Length | 🔧 Under improvement |
-| Flow field visualization | 📋 Planned |
+| Flow field visualization | ✅ Available — see above |
 
 ---
 
@@ -187,7 +252,7 @@ parametric-pinn-flow-cylinder/
 │   └── sem-results.ipynb       # Full training + results (Kaggle T4)
 │
 ├── results/
-│   ├── figures/                # Flow field plots
+│   ├── figures/                # Flow field plots (uploaded separately)
 │   └── checkpoints/            # Saved model weights (.weights.h5)
 │
 ├── data/
@@ -218,13 +283,13 @@ parametric-pinn-flow-cylinder/
 - [x] 8×40 parametric PINN (11,722 parameters)
 - [x] Physics-only training (Mode A: ~4-5% Cd error)
 - [x] Benchmark-informed training (Mode B: **2.27% mean Cd error**)
-- [x] 7 training + 2 interpolation + 2 extrapolation Re values
+- [x] 7 training + 2 interpolation + 2 extrapolation Re values (11 total)
 - [x] Multi-objective loss: PDE + BC + Cd + Wake + Bernoulli + Surface
 - [x] 3-phase training: Adam → L-BFGS R1 → L-BFGS R2
 - [x] Cd validated for all 11 Re values
 - [x] Separation angle validated
+- [x] Flow field visualizations (Training + Interpolation + Extrapolation)
 - [ ] Wake length post-processing fix
-- [ ] Flow field visualization plots
 - [ ] Extend to higher Re (time-dependent solver)
 
 ---
@@ -260,10 +325,10 @@ Steady-state laminar flow (Re < 47): no time dependence, 2D incompressible, no t
 
 ## Author
 
-**Raghavendra M**
-M.Tech Aerospace Engineering (Thermal & Propulsion) @ IIST
-📧 ragharit586@gmail.com
-🔗 [LinkedIn](https://www.linkedin.com/in/raghavendra-mylar-b00b95240/)
+**Raghavendra M**  
+M.Tech Aerospace Engineering (Thermal & Propulsion) @ IIST  
+📧 ragharit586@gmail.com  
+🔗 [LinkedIn](https://www.linkedin.com/in/raghavendra-mylar-b00b95240/)  
 🐙 [GitHub](https://github.com/ragharit586-pixel)
 
 ---
