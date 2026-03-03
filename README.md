@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?style=flat-square&logo=python)
 ![TensorFlow](https://img.shields.io/badge/TensorFlow-2.x-orange?style=flat-square&logo=tensorflow)
-![Accuracy](https://img.shields.io/badge/Accuracy-97--98%25-success?style=flat-square)
+![Cd Accuracy](https://img.shields.io/badge/Cd%20Accuracy-97.7%25-success?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-In%20Progress-yellow?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![GPU](https://img.shields.io/badge/GPU-NVIDIA%20T4-76B900?style=flat-square&logo=nvidia)
@@ -30,11 +30,13 @@ Unlike traditional CFD solvers that require expensive re-simulation for every ne
 | Metric | Value |
 |--------|-------|
 | **Training Data** | **No CFD field data** (u,v,p) |
-| **Physics-Only Accuracy** | 95–96% (4–5% error) |
-| **Benchmark-Informed Accuracy** | **97–98% (1–2% error)** |
+| **Physics-Only Cd Error** | ~4–5% |
+| **Benchmark-Informed Cd Error** | **~2.27% mean (1.5–3.4% range)** |
+| **Separation Angle Error** | ~10.81% mean |
 | **Real-Time Inference Speed** | <50ms (NVIDIA T4) |
 | **Reynolds Number Range** | Re = 10 → 47 (steady regime) |
 | **Training Hardware** | NVIDIA T4 GPU (Kaggle) |
+| **Total Parameters** | 11,722 |
 
 ---
 
@@ -62,6 +64,7 @@ Input:  (x, y, Re)  →  Parametric PINN  →  Output: (ψ, p)  →  Derive: (u,
 - **Input layer:** `[x, y, Re]` (3 neurons) — spatial coordinates + Reynolds number
 - **Hidden layers:** **8 fully-connected layers × 40 neurons**, tanh activation
 - **Output layer:** `[ψ, p]` (2 neurons) — stream function + pressure
+- **Total parameters:** 11,722
 - **Input scaling:** All inputs normalized to [-1, 1] for balanced gradients
 - **Velocity derivation:** `u = ∂ψ/∂y`, `v = -∂ψ/∂x` via automatic differentiation
 
@@ -73,7 +76,7 @@ Input:  (x, y, Re)  →  Parametric PINN  →  Output: (ψ, p)  →  Derive: (u,
 | **Interpolation test** | 12 (between 10–15), 28 (between 25–30) | 2 |
 | **Extrapolation test** | 42, 45 (beyond training, still < Re_critical=47) | 2 |
 
-All Reynolds numbers stay **below Re_critical = 47** to remain in the steady-state regime (no vortex shedding).
+All Reynolds numbers stay **below Re_critical = 47** (steady-state regime, no vortex shedding).
 
 ---
 
@@ -89,27 +92,23 @@ Uses **only** Navier-Stokes PDE residuals and boundary conditions — zero exter
 L_total = L_PDE + β_BC · L_BC
 ```
 
-- **Accuracy:** 95–96% (4–5% error)
-- **Advantages:** Fully unsupervised, generalizes well
-- **Limitations:** Slightly lower accuracy on integral quantities (Cd, wake length)
+- **Cd Error:** ~4–5%
+- **Advantage:** Fully unsupervised, zero external data
 
 ### Mode B: Physics + Benchmark-Informed Constraints (Weakly Supervised)
 
-Adds weak supervision from **literature/benchmark scalars** (not CFD fields) to refine integral quantities:
+Adds weak supervision from **literature scalar targets** (not CFD fields):
 
 ```
 L_total = L_PDE + β_BC·L_BC + β_Cd·L_Cd + β_wake·L_wake + β_Bern·L_Bernoulli + β_surf·L_surface
 ```
 
-- **Accuracy:** **97–98% (1–2% error)**
-- **Advantages:** Higher accuracy on Cd and wake physics
-- **Note:** Uses only scalar targets from Dennis & Chang (1970) — **no CFD solution fields (u,v,p)**
+- **Cd Error: ~2.27% mean** (1.5–3.4% range across all Re)
+- **Note:** Uses only scalar Cd targets from Dennis & Chang (1970) — **no CFD solution fields (u,v,p)**
 
 ---
 
-## Multi-Objective Loss Function (Mode B)
-
-**No CFD field data used.** The network learns from **6 physics-based loss terms**:
+## Multi-Objective Loss (Mode B)
 
 ### Loss Weights
 
@@ -126,55 +125,81 @@ L_total = L_PDE + β_BC·L_BC + β_Cd·L_Cd + β_wake·L_wake + β_Bern·L_Berno
 - **Continuity:** `∂u/∂x + ∂v/∂y = 0`
 - **Momentum-x:** `u·∂u/∂x + v·∂u/∂y + ∂p/∂x − ν·∇²u = 0`
 - **Momentum-y:** `u·∂v/∂x + v·∂v/∂y + ∂p/∂y − ν·∇²v = 0`
-- Kinematic viscosity `ν = ν(Re)` computed dynamically: `ν = U·D/Re`
-
-### Boundary Conditions (BC Loss)
-- **Inlet:** Parabolic velocity profile
-- **Cylinder surface:** No-slip condition (`u = v = 0`)
-- **Outlet:** Pressure outlet
-
-### Wake Length Targets (from Literature)
-
-| Re | Target Wake Length (×D) |
-|----|------------------------|
-| 10 | 1.45 |
-| 15 | 1.65 |
-| 20 | 1.95 |
-| 25 | 2.25 |
-| 30 | 2.60 |
-| 35 | 3.05 |
-| 40 | 3.50 |
+- Kinematic viscosity computed dynamically: `ν = U·D/Re`
 
 ---
 
 ## Training Strategy — 3-Phase Pipeline
 
 ### Phase 1: Adam Optimizer
-- **Epochs:** 35,000
-- **Learning rate:** 1e-3
-- **Batch size:** 4,096
-- **Collocation points:** 15,000 per Reynolds number (105,000 total)
-- **Cd loss activation:** Starts at epoch 8,000 (after physics is learned first)
-- **Checkpoint frequency:** Every 3,000 epochs
-- **Print frequency:** Every 1,000 epochs
+- **Epochs:** 35,000 | **LR:** 1e-3 | **Batch:** 4,096
+- **Collocation points:** 15,000 per Re × 7 Re = **105,000 total**
+- **BC points:** 30,800 total (inlet 7k, wall 8.4k, cylinder 8.4k, outlet 7k)
+- **Cd loss activation:** Starts at epoch 8,000
 - **Wake/outer flow resampling:** Every 1,000 epochs
 
 ### Phase 2: L-BFGS Fine-Tuning (Round 1)
-- **Iterations:** 3,000
-- **Loss:** Physics + BC only (stable convergence)
-- **β_BC:** 6.0
+- **Iterations:** 3,000 | **Loss:** Physics + BC only
 - **Method:** TensorFlow Probability L-BFGS or SciPy L-BFGS-B fallback
 
 ### Phase 3: Extended L-BFGS (Round 2)
-- **Iterations:** 3,000 additional
-- **Loss:** Physics + BC + **Cd** (adds drag coefficient accuracy)
+- **Iterations:** 3,000 | **Loss:** Physics + BC + Cd
 - **β_Cd:** 1.0 (increased for final Cd accuracy)
-- **Tolerance:** 1e-9 (tighter convergence)
-- **Purpose:** Push Cd error below 3% across all Re values
 
 ```
-Total Training: Adam (35k epochs) → L-BFGS R1 (3k iter) → L-BFGS R2 (3k iter)
+Adam (35k epochs) → L-BFGS Round 1 (3k iter) → L-BFGS Round 2 (3k iter)
 ```
+
+---
+
+## Verified Results
+
+> All results validated from actual notebook outputs.
+
+### Drag Coefficient (Cd) — Verified
+Compared against **Dennis & Chang (1970)** benchmark:
+
+| Re | PINN Cd | Benchmark Cd | Error |
+|----|---------|--------------|-------|
+| 10 | 2.8596 | 2.812 | **1.69%** |
+| 12 *(interp)* | 2.6007 | 2.689 | 3.28% |
+| 15 | 2.3011 | 2.255 | **2.04%** |
+| 20 | 1.9625 | 2.001 | **1.92%** |
+| 25 | 1.7540 | 1.815 | 3.36% |
+| 28 *(interp)* | 1.6645 | 1.720 | 3.23% |
+| 30 | 1.6138 | 1.659 | **2.73%** |
+| 35 | 1.5027 | 1.529 | **1.72%** |
+| 40 | 1.3960 | 1.422 | **1.83%** |
+| 42 *(extrap)* | 1.3571 | 1.378 | **1.52%** |
+| 45 *(extrap)* | 1.3086 | 1.331 | **1.68%** |
+| | | **Mean Error** | **2.27%** |
+
+### Separation Angle — Verified
+
+| Re | PINN (°) | Benchmark (°) | Error |
+|----|----------|---------------|-------|
+| 10 | 60.0 | 48.0 | 25.0% |
+| 15 | 62.5 | 55.0 | 13.6% |
+| 20 | 65.0 | 63.0 | 3.2% |
+| 25 | 67.5 | 70.0 | 3.6% |
+| 30 | 70.0 | 77.0 | 9.1% |
+| 35 | 72.5 | 81.0 | 10.5% |
+| 40 | 75.0 | 84.0 | 10.7% |
+| | | **Mean Error** | **10.81%** |
+
+> Separation angle shows higher error at low Re (Re = 10, 15) due to weak separation signal in the laminar regime.
+
+### Wake Length
+Wake length detection was **skipped for Re ≤ 24** (weak signal) and showed no clear zero-crossing for Re ≥ 25 in the current post-processing implementation. This is a **post-processing limitation**, not a physics failure — the pressure and velocity fields are physically consistent.
+
+### Summary
+
+| Metric | Result | Status |
+|--------|--------|--------|
+| Cd mean error (all 11 Re) | **2.27%** | ✅ Excellent |
+| Cd error range | 1.5% – 3.4% | ✅ Excellent |
+| Separation angle mean error | 10.81% | ⚠️ Good |
+| Wake length detection | Not computed | ❌ Post-processing fix needed |
 
 ---
 
@@ -184,31 +209,25 @@ Total Training: Adam (35k epochs) → L-BFGS R1 (3k iter) → L-BFGS R2 (3k iter
 parametric-pinn-flow-cylinder/
 │
 ├── src/                        # Core source code
-│   ├── model.py                # PINN architecture (8×40 network)
+│   ├── model.py                # PINN architecture (8×40, 11,722 params)
 │   ├── train.py                # Full 3-phase training pipeline
 │   ├── physics.py              # Navier-Stokes PDE residuals
 │   ├── boundary.py             # Boundary condition enforcement
 │   └── utils.py                # Visualization, domain sampling
 │
-├── notebooks/                  # Jupyter notebooks
-│   ├── sem-results.ipynb       # Full training + results (Kaggle)
-│   ├── 01_training.ipynb       # Model training walkthrough
-│   ├── 02_evaluation.ipynb     # Validation and metrics
-│   └── 03_visualization.ipynb  # Flow field plots
+├── notebooks/
+│   └── sem-results.ipynb       # Full training + results (Kaggle T4)
 │
-├── configs/                    # Training configurations
-│   └── config.yaml             # Hyperparameters (Re range, β weights, lr)
-│
-├── results/                    # Output plots and saved models
-│   ├── figures/                # Velocity/pressure field plots
+├── results/
+│   ├── figures/                # Flow field plots (velocity, pressure)
 │   └── checkpoints/            # Saved model weights (.weights.h5)
 │
-├── data/                       # Benchmark data (Dennis & Chang 1970)
-│   └── README.md               # Reference data sources
+├── data/
+│   └── README.md               # Dennis & Chang (1970) benchmark data
 │
-├── requirements.txt            # Python dependencies
-├── LICENSE                     # MIT License
-└── README.md                   # This file
+├── requirements.txt
+├── LICENSE
+└── README.md
 ```
 
 ---
@@ -221,8 +240,7 @@ parametric-pinn-flow-cylinder/
 | TensorFlow 2.x | Neural network + automatic differentiation |
 | TensorFlow Probability | L-BFGS optimizer (primary) |
 | SciPy | L-BFGS-B optimizer (fallback) |
-| NumPy | Numerical computation |
-| Matplotlib / Seaborn | Flow field visualization |
+| NumPy / Matplotlib | Numerics + visualization |
 | Kaggle (NVIDIA T4 GPU) | Training platform |
 
 ---
@@ -234,102 +252,56 @@ parametric-pinn-flow-cylinder/
 pip install -r requirements.txt
 ```
 
-### Training the Model
-```bash
-python src/train.py --config configs/config.yaml
-```
-
 ### Running Inference
 ```python
 from src.model import ParametricPINN
 import tensorflow as tf
 
-# Load trained model
 model = ParametricPINN.load('results/checkpoints/best_model')
 
-# Predict flow field at Re = 25
+# Predict at Re = 25
 X = tf.constant([[0.5, 0.2, 25.0]], dtype=tf.float32)  # x, y, Re
-
-# Get predictions
 u, v, p, psi = model.compute_velocities_from_streamfunction(X)
 
-print(f"Velocity: u={u.numpy()[0,0]:.4f}, v={v.numpy()[0,0]:.4f}")
-print(f"Pressure: p={p.numpy()[0,0]:.4f}")
+print(f"u={u.numpy()[0,0]:.4f}, v={v.numpy()[0,0]:.4f}, p={p.numpy()[0,0]:.4f}")
 ```
-
----
-
-## Results & Validation
-
-### Accuracy Comparison: Physics-Only vs Benchmark-Informed
-
-| Training Mode | Training Re | Interpolation Re | Extrapolation Re |
-|---------------|-------------|------------------|------------------|
-| **Physics-Only (Mode A)** | 95–96% accuracy<br>(4–5% error) | 94–95% accuracy | 92–93% accuracy |
-| **Benchmark-Informed (Mode B)** | **97–98% accuracy**<br>**(1–2% error)** | **97–98% accuracy** | **95–96% accuracy** |
-
-### Drag Coefficient (Cd) Validation — Mode B
-Compared against **Dennis & Chang (1970)** experimental data:
-
-| Re | PINN Prediction | Benchmark | Error |
-|----|----------------|-----------|-------|
-| 10 | 2.94 | 2.96 | 0.7% |
-| 20 | 2.03 | 2.05 | 1.0% |
-| 30 | 1.87 | 1.89 | 1.1% |
-| 40 | 1.57 | 1.59 | 1.3% |
-| 28 (interp) | 1.66 | 1.72 | 3.3% |
-
-### Key Insights
-- **Physics-only baseline** achieves 95–96% accuracy with zero external data
-- **Benchmark-informed constraints** improve accuracy to 97–98% by refining integral quantities (Cd, wake length)
-- **Both approaches avoid CFD solution fields** — only physics equations and optional scalar targets
-
-### Flow Field Visualization
-*(Figures will be added — velocity fields, pressure contours, loss convergence curves)*
 
 ---
 
 ## Project Status
 
-- [x] Baseline PINN for single Reynolds number
-- [x] Parametric extension with Re as input (3D input space)
-- [x] Physics-only training (Mode A: 95–96% accuracy)
-- [x] Benchmark-informed training (Mode B: 97–98% accuracy)
-- [x] 7 training + 2 interpolation + 2 extrapolation Re values
-- [x] Multi-objective loss (6 terms: PDE + BC + Cd + Wake + Bernoulli + Surface)
+- [x] 8×40 parametric PINN architecture (11,722 parameters)
+- [x] Pure physics training (Mode A: ~4-5% Cd error)
+- [x] Benchmark-informed training (Mode B: **2.27% mean Cd error**)
+- [x] 7 training + 2 interpolation + 2 extrapolation Re values (11 total)
+- [x] Multi-objective loss: PDE + BC + Cd + Wake + Bernoulli + Surface
 - [x] 3-phase training: Adam → L-BFGS R1 → L-BFGS R2
-- [ ] Add flow field visualization plots to `results/figures/`
-- [ ] Extend to higher Re with time-dependent unsteady solver
-- [ ] 3D extension (flow over sphere)
-- [ ] Inverse problem: infer Re from velocity measurements
+- [x] Cd validated against Dennis & Chang (1970) for all 11 Re values
+- [ ] Fix wake length post-processing detection
+- [ ] Add flow field visualization plots
+- [ ] Extend to higher Re (time-dependent solver)
+- [ ] Inverse problem: infer Re from sparse velocity measurements
 
 ---
 
-## Physics Regime: Steady Flow Only
+## Physics Regime
 
-This work focuses on **steady-state laminar flow** (Re < 47) to avoid unsteady vortex shedding. Key physics assumptions:
-
-- **No time dependence** (∂/∂t = 0)
-- **Steady Navier-Stokes equations** valid
-- **Laminar regime** — no turbulence modeling needed
-- **2D flow** — incompressible, constant properties
-
-For Re > 47, the von Kármán vortex street emerges, requiring a time-dependent solver.
+This work focuses on **steady-state laminar flow** (Re < 47):
+- No time dependence (∂/∂t = 0), steady Navier-Stokes valid
+- 2D incompressible flow, no turbulence modeling
+- For Re > 47: von Kármán vortex street → requires time-dependent solver
 
 ---
 
 ## Related Work
 
-This project is part of ongoing M.Tech research at IIST exploring:
+This project is part of ongoing M.Tech research at IIST:
 - **Inverse PINNs** for heat flux estimation in regenerative cooling channels
 - **Parametric surrogate modeling** for aerodynamic design optimization
-- **Physics-informed deep learning** for rocket propulsion thermal analysis
 
 ---
 
 ## Citation
-
-If you find this work useful, please cite:
 
 ```bibtex
 @misc{raghavendra2026parametricpinn,
@@ -346,8 +318,8 @@ If you find this work useful, please cite:
 
 ## References
 
-- **Dennis, S. C. R., & Chang, G. Z. (1970).** "Numerical solutions for steady flow past a circular cylinder at Reynolds numbers up to 100." *Journal of Fluid Mechanics*, 42(3), 471–489.
-- **Raissi, M., Perdikaris, P., & Karniadakis, G. E. (2019).** "Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations." *Journal of Computational Physics*, 378, 686–707.
+- **Dennis, S. C. R., & Chang, G. Z. (1970).** "Numerical solutions for steady flow past a circular cylinder at Reynolds numbers up to 100." *J. Fluid Mechanics*, 42(3), 471–489.
+- **Raissi, M., Perdikaris, P., & Karniadakis, G. E. (2019).** "Physics-informed neural networks." *J. Computational Physics*, 378, 686–707.
 - **Rao, C., Sun, H., & Liu, Y. (2020).** "Physics-informed deep learning for incompressible laminar flows." *Theoretical and Applied Mechanics Letters*, 10(3), 207–212.
 
 ---
