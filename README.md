@@ -141,7 +141,7 @@ L_total = L_PDE + β_BC · L_BC
 ### Mode B: Physics + Benchmark-Informed Constraints (Weakly Supervised)
 
 ```
-L_total = L_PDE + β_BC·L_BC + β_Cd·L_Cd + β_wake·L_wake + β_Bern·L_Bernoulli + β_surf·L_surface
+L_total = L_PDE + β_BC·L_BC + β_Cd·L_Cd + β_Bern·L_Bernoulli + β_surf·L_surface
 ```
 - **Cd Error: ~2.27% mean** | Scalar targets from Dennis & Chang (1970) only — no CFD fields
 
@@ -154,7 +154,6 @@ L_total = L_PDE + β_BC·L_BC + β_Cd·L_Cd + β_wake·L_wake + β_Bern·L_Berno
 | PDE residuals | `L_PDE` | 1.0 | Navier-Stokes continuity + momentum |
 | Boundary conditions | `L_BC` | **6.0** | Inlet, no-slip, outlet BCs |
 | Drag coefficient | `L_Cd` | 0.4 | Match Dennis & Chang (1970) benchmark |
-| Wake length | `L_wake` | 0.5 | Recirculation zone size constraint |
 | Bernoulli regularization | `L_Bern` | 0.3 | Outer flow pressure-velocity consistency |
 | Surface pressure | `L_surf` | 0.2 | Correct pressure gradient on cylinder |
 
@@ -174,13 +173,13 @@ Adam (35k epochs) → L-BFGS Round 1 (3k iter) → L-BFGS Round 2 (3k iter)
 
 | Phase | Method | Iterations | Loss Terms |
 |-------|--------|------------|------------|
-| 1 | Adam (lr=1e-3) | 35,000 epochs | PDE + BC + Cd (from epoch 8k) + Wake + Bernoulli + Surface |
+| 1 | Adam (lr=1e-3) | 35,000 epochs | PDE + BC + Cd (from epoch 8k) + Bernoulli + Surface |
 | 2 | L-BFGS R1 | 3,000 | PDE + BC |
 | 3 | L-BFGS R2 | 3,000 | PDE + BC + Cd (β=1.0) |
 
 - **Total collocation points:** 105,000 (15,000/Re × 7 Re)
 - **BC points:** 30,800 total
-- **Wake/outer resampling:** Every 1,000 epochs
+- **Outer flow resampling:** Every 1,000 epochs
 
 ---
 
@@ -229,7 +228,6 @@ Adam (35k epochs) → L-BFGS Round 1 (3k iter) → L-BFGS Round 2 (3k iter)
 |--------|--------|
 | Drag Coefficient (Cd) | ✅ Validated — 2.27% mean error |
 | Separation Angle | ✅ Validated — 6.0% mean error |
-| Wake Length | 🔧 Under improvement |
 | Flow field visualization | ✅ Available — see above |
 
 ---
@@ -282,12 +280,11 @@ parametric-pinn-flow-cylinder/
 - [x] Physics-only training (Mode A: ~4-5% Cd error)
 - [x] Benchmark-informed training (Mode B: **2.27% mean Cd error**)
 - [x] 7 training + 2 interpolation + 2 extrapolation Re values (11 total)
-- [x] Multi-objective loss: PDE + BC + Cd + Wake + Bernoulli + Surface
+- [x] Multi-objective loss: PDE + BC + Cd + Bernoulli + Surface
 - [x] 3-phase training: Adam → L-BFGS R1 → L-BFGS R2
-- [x] Cd validated for all 11 Re values
+- [x] Cd validated for all 11 Re values (**2.27% mean error**)
 - [x] Separation angle validated (**6.0% mean error**)
 - [x] Flow field visualizations (Training + Interpolation + Extrapolation)
-- [ ] Wake length post-processing fix
 - [ ] Extend to higher Re (time-dependent solver)
 
 ---
